@@ -1,0 +1,62 @@
+C51 COMPILER V9.60.7.0   SEG                                                               03/18/2026 16:42:58 PAGE 1   
+
+
+C51 COMPILER V9.60.7.0, COMPILATION OF MODULE SEG
+OBJECT MODULE PLACED IN .\Objects\seg.obj
+COMPILER INVOKED BY: C:\AAA\C51\BIN\C51.EXE ..\src\driver\seg.c OPTIMIZE(8,SPEED) BROWSE INCDIR(..\src\driver) DEBUG OBJ
+                    -ECTEXTEND PRINT(.\Listings\seg.lst) TABS(2) OBJECT(.\Objects\seg.obj)
+
+line level    source
+
+   1          #include "seg.h"
+   2          
+   3          unsigned char seg_dula[] = {0xC0,0xF9,0xA4,0xB0,0x99,0x92,0x82,0xF8,0x80,0x90,0xFF,0xBF}; // ÊýÂë¹Ü¶ÎÂëÊý×
+             -é
+   4          
+   5          /**
+   6           * @brief ÊýÂë¹ÜÉ¨Ãèº¯Êý
+   7           * @param wela Î»Ñ¡×ø±ê 
+   8           * @param dula ¶ÎÑ¡Ë÷Òý
+   9           * @param Ð¡Êýµã¿ØÖÆÎ» point 1-ÏÔÊ¾ 0-Òþ²Ø
+  10           */
+  11          void seg_disp(unsigned char wela, unsigned char dula, bit point) {
+  12   1        unsigned char temp;
+  13   1        
+  14   1        // --- ÏûÓ° ---
+  15   1        P0 = 0xff;
+  16   1        temp = P2 & 0x1f | 0xe0;
+  17   1        P2 = temp;
+  18   1        temp = P2 & 0x1f;
+  19   1        P2 = temp;  
+  20   1        
+  21   1          
+  22   1        // --- Î»Ñ¡ --- 
+  23   1        P0 = 0x01 << wela;
+  24   1        temp = P2 & 0x1f | 0xc0;
+  25   1        P2 = temp;
+  26   1        temp = P2 & 0x1f;
+  27   1        P2 = temp;  
+  28   1        
+  29   1        // --- ¶ÎÑ¡ ---
+  30   1        P0 = seg_dula[dula];
+  31   1        if(point)
+  32   1          P0 &= 0x7f; // ÏÔÊ¾Ð¡Êýµã 
+  33   1        temp = P2 & 0x1f | 0xe0;
+  34   1        P2 = temp;
+  35   1        temp = P2 & 0x1f;
+  36   1        P2 = temp;    
+  37   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =     73    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =     12    ----
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----       1
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)
