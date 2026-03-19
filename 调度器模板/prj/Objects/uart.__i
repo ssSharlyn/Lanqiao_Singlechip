@@ -1,1 +1,0 @@
-"..\src\driver\uart.c" OPTIMIZE (8,SPEED) BROWSE INCDIR(..\src\driver) DEBUG OBJECTEXTEND PRINT(.\Listings\uart.lst) TABS (2) OBJECT(.\Objects\uart.obj)
