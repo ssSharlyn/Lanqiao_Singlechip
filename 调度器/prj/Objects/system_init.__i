@@ -1,1 +1,0 @@
-"..\src\driver\system_init.c" OPTIMIZE (8,SPEED) BROWSE INCDIR(..\src\driver) DEBUG OBJECTEXTEND PRINT(.\Listings\system_init.lst) TABS (2) OBJECT(.\Objects\system_init.obj)
