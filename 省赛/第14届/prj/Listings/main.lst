@@ -1,0 +1,543 @@
+C51 COMPILER V9.60.7.0   MAIN                                                              03/19/2026 22:52:55 PAGE 1   
+
+
+C51 COMPILER V9.60.7.0, COMPILATION OF MODULE MAIN
+OBJECT MODULE PLACED IN .\Objects\main.obj
+COMPILER INVOKED BY: C:\AAA\C51\BIN\C51.EXE ..\src\user\main.c OPTIMIZE(8,SPEED) BROWSE INCDIR(..\src\driver) DEBUG OBJE
+                    -CTEXTEND PRINT(.\Listings\main.lst) TABS(2) OBJECT(.\Objects\main.obj)
+
+line level    source
+
+   1          #include <STC15F2K60S2.H>
+   2          #include <string.h>
+   3          #include "sys.h"
+   4          #include "seg.h"
+   5          #include "key.h"
+   6          #include "led.h"
+   7          #include "ds1302.h"
+   8          #include "iic.h"
+   9          #include "onewire.h"
+  10          
+  11          // ** 参数定义区 ** //
+  12          
+  13          /* scheduler */
+  14          idata unsigned long int uwTick; // 系统计时
+  15          idata unsigned char task_num; // 调度器任务函数数量
+  16          
+  17          /* key */ 
+  18          idata unsigned char key_val, key_down, key_up, key_old; // 按键状态，瞬时状态、下降沿、上升沿、上次状态
+  19          bit key_flag; // 长按计时标志
+  20          unsigned int timer_2s; // ws计时
+  21          
+  22          /* seg */
+  23          pdata unsigned char seg_buf[8] = {10, 10, 10, 10, 10, 10, 10, 10}; // 数码管状态缓存数组，初始化为熄灭
+  24          idata unsigned char seg_pos; // 数码管位置索引
+  25          idata unsigned char seg_mode; // 数码管显示模式，0-时间，1-回显，2-参数
+  26          unsigned char seg_mode_rcd; // 数码管显示模式记录
+  27          idata unsigned char rtn_mode; // 回显模式，0-温度，1-湿度，2-时间
+  28          
+  29          /* LED */
+  30          pdata unsigned char ucled[8] = {0, 0, 0, 0, 0, 0, 0, 0}; // LED状态缓存数组，初始化为熄灭
+  31          bit led_flag; // LED闪烁标志
+  32          unsigned char timer_100ms; // 100ms计时
+  33          
+  34          /* RTC */
+  35          pdata unsigned char ucRTC[3] = {23, 59, 55}; // 时钟数据缓存数组
+  36          unsigned char ucRTC_rcd[2] = {00, 00}; // 采集时间数据缓存数组  
+  37          
+  38          /* AD/DA */
+  39          idata unsigned int volt_1_x100, volt_2_x100; // 光敏电阻/电位器电压值x100(节省存储空间和简化计算)
+  40          bit lit_flag = 0, lit_flag_old = 0; // 当前/上次亮暗状态 0-暗 1-亮
+  41          idata unsigned int timer_3s; // 3s计时
+  42          bit cllct_flag = 0; // 数据采集标志
+  43          bit cllct_lock_flag = 0; // 数据采集锁定标志(防止3s内重复采集)
+  44          unsigned char cllct_num = 0; // 采集次数
+  45          
+  46          /* Temperature */
+  47          idata unsigned char temperature; // 温度值
+  48          idata unsigned char humi; // 湿度值
+  49          unsigned char temperature_rcd; // 上次温度值
+  50          unsigned char humi_rcd; // 上次湿度值
+  51          unsigned char temperature_p = 30; // 温度参数
+  52          unsigned char temperature_max; // 最大温度
+  53          unsigned int temperature_ave_x10; // 平均温度x10
+  54          unsigned int temperature_sum; // 温度总和
+C51 COMPILER V9.60.7.0   MAIN                                                              03/19/2026 22:52:55 PAGE 2   
+
+  55          unsigned char humi_max;        // 最大湿度
+  56          unsigned int humi_ave_x10;        // 平均湿度x10
+  57          unsigned int humi_sum;        // 湿度总和
+  58          bit data_flag = 0; // 数据标志位(用于判断数据是否升高)
+  59          
+  60          /* Freq */
+  61          idata unsigned int freq; // 频率值
+  62          idata unsigned int timer_1s; // 1s计时                           
+  63          
+  64          /* other parameters */
+  65          
+  66          
+  67          // ** 函数定义区 ** //
+  68          
+  69          /**
+  70           * @brief 按键状态机任务函数
+  71           * @note  利用位运算进行边沿检测
+  72           */
+  73          void key_task(void) {
+  74   1        // 温湿度界面下，所有按键无效，直接返回
+  75   1        if(seg_mode == 3) return;
+  76   1        
+  77   1        key_val = key_read(); // 获取当前按键状态
+  78   1        key_down = key_val & (key_val ^ key_old); // 获取按键下降沿状态
+  79   1        key_up = ~key_val & (key_val ^ key_old);  // 获取按键上升沿状态
+  80   1        key_old = key_val; // 更新上一次按键状态
+  81   1        
+  82   1        switch(key_down) {
+  83   2          // --- 界面按键 --- 
+  84   2          case 4:
+  85   2            seg_mode = (seg_mode + 1) % 3; 
+  86   2            // 每次从时间界面切换到回显界面时，处于温度回显界面
+  87   2            if(seg_mode == 1) {
+  88   3              rtn_mode = 0;
+  89   3            }
+  90   2            break;  
+  91   2          // --- 回显按键 --- 
+  92   2          case 5:
+  93   2            // 只在回显界面生效
+  94   2            if(seg_mode == 1)
+  95   2              rtn_mode = (rtn_mode + 1) % 3; 
+  96   2            break;  
+  97   2          // --- + 按键 --- 
+  98   2          case 8:
+  99   2            // 只在参数界面生效
+ 100   2            if(seg_mode == 2) {
+ 101   3              if(++temperature_p > 99) {
+ 102   4                temperature_p = 0;
+ 103   4              }
+ 104   3            }
+ 105   2            break;  
+ 106   2          // --- - 按键 --- 
+ 107   2          case 9:
+ 108   2            // 只在参数界面生效
+ 109   2            if(seg_mode == 2) {
+ 110   3              if(--temperature_p > 200) {
+ 111   4                temperature_p = 99;
+ 112   4              }
+ 113   3            }
+ 114   2            break;  
+ 115   2        }
+ 116   1        
+C51 COMPILER V9.60.7.0   MAIN                                                              03/19/2026 22:52:55 PAGE 3   
+
+ 117   1        // --- 按键9 长按功能 ---
+ 118   1        // 只在时间回显界面生效
+ 119   1        if(seg_mode == 1 && rtn_mode == 2) {
+ 120   2          // 检测到按键9按下
+ 121   2          if(key_down == 9) {
+ 122   3            key_flag = 1; // 开始长按计时 
+ 123   3          }
+ 124   2          // 检测到按键9松开
+ 125   2          if(key_up == 9) {
+ 126   3            // 长按达到2s,清除所有记录的数据
+ 127   3            if(timer_2s >= 2000) {
+ 128   4              temperature_max = 0; 
+ 129   4              temperature_ave_x10 = 0;  
+ 130   4              temperature_sum = 0;  
+ 131   4              humi_max = 0;        
+ 132   4              humi_ave_x10 = 0;        
+ 133   4              humi_sum = 0;  
+ 134   4              memset(ucRTC_rcd, 0, 2);
+ 135   4              cllct_num = 0;        
+ 136   4            } 
+ 137   3            key_flag = 0; // 重置长按计时标志 
+ 138   3            timer_2s = 0; // 重置计时   
+ 139   3          }
+ 140   2        }
+ 141   1      }
+ 142          
+ 143          /**
+ 144           * @brief 数码管显示任务函数
+ 145           * @note  需要显示小数点时，在值后加上'.'
+ 146           */
+ 147          void seg_task(void) {
+ 148   1        
+ 149   1        switch(seg_mode) {
+ 150   2          // --- 时间界面 ----
+ 151   2          case 0:
+ 152   2            seg_buf[2] = seg_buf[5] = 11; // 显示短横线"-"
+ 153   2            seg_buf[0] = ucRTC[0] / 10; // 显示时
+ 154   2            seg_buf[1] = ucRTC[0] % 10;
+ 155   2            seg_buf[3] = ucRTC[1] / 10; // 显示分
+ 156   2            seg_buf[4] = ucRTC[1] % 10;
+ 157   2            seg_buf[6] = ucRTC[2] / 10; // 显示秒
+ 158   2            seg_buf[7] = ucRTC[2] % 10;
+ 159   2            break;
+ 160   2          // --- 回显界面 ----
+ 161   2          case 1:
+ 162   2            seg_buf[0] = 12 + rtn_mode; // 显示字母
+ 163   2            switch(rtn_mode) {
+ 164   3              // -- 温度回显 --
+ 165   3              case 0:
+ 166   3                seg_buf[1] = 10;
+ 167   3                // 触发次数不为0才显示
+ 168   3                if(cllct_num > 0) {
+ 169   4                  seg_buf[2] = temperature_max / 10 % 10;
+ 170   4                  seg_buf[3] = temperature_max % 10;
+ 171   4                  seg_buf[4] = 11;
+ 172   4                  seg_buf[5] = temperature_ave_x10 / 100 % 10;
+ 173   4                  seg_buf[6] = temperature_ave_x10 / 10 % 10 + '.';
+ 174   4                  seg_buf[7] = temperature_ave_x10 % 10;
+ 175   4                }
+ 176   3                else {
+ 177   4                  seg_buf[2] = 10;
+ 178   4                  seg_buf[3] = 10;
+C51 COMPILER V9.60.7.0   MAIN                                                              03/19/2026 22:52:55 PAGE 4   
+
+ 179   4                  seg_buf[4] = 10;
+ 180   4                  seg_buf[5] = 10;
+ 181   4                  seg_buf[6] = 10;
+ 182   4                  seg_buf[7] = 10;
+ 183   4                }
+ 184   3                break;
+ 185   3              // -- 湿度回显 --
+ 186   3              case 1:
+ 187   3                seg_buf[1] = 10;
+ 188   3                // 触发次数不为0才显示  
+ 189   3                if(cllct_num > 0) {
+ 190   4                  seg_buf[2] = humi_max / 10 % 10;
+ 191   4                  seg_buf[3] = humi_max % 10;
+ 192   4                  seg_buf[4] = 11;
+ 193   4                  seg_buf[5] = humi_ave_x10 / 100 % 10;
+ 194   4                  seg_buf[6] = humi_ave_x10 / 10 % 10 + '.';
+ 195   4                  seg_buf[7] = humi_ave_x10 % 10;
+ 196   4                }
+ 197   3                else {
+ 198   4                  seg_buf[2] = 10;
+ 199   4                  seg_buf[3] = 10;
+ 200   4                  seg_buf[4] = 10;
+ 201   4                  seg_buf[5] = 10;
+ 202   4                  seg_buf[6] = 10;
+ 203   4                  seg_buf[7] = 10;
+ 204   4                }
+ 205   3                break;
+ 206   3              // -- 时间回显 --
+ 207   3              case 2:
+ 208   3                seg_buf[1] = cllct_num / 10 % 10;
+ 209   3                seg_buf[2] = cllct_num % 10;
+ 210   3                // 触发次数不为0才显示
+ 211   3                if(cllct_num > 0) {
+ 212   4                  seg_buf[3] = ucRTC_rcd[0] / 10; // 显示时
+ 213   4                  seg_buf[4] = ucRTC_rcd[0] % 10;
+ 214   4                  seg_buf[5] = 11;            // 显示短横线"-"
+ 215   4                  seg_buf[6] = ucRTC_rcd[1] / 10; // 显示分
+ 216   4                  seg_buf[7] = ucRTC_rcd[1] % 10;      
+ 217   4                }
+ 218   3                else {
+ 219   4                  seg_buf[3] = 10;
+ 220   4                  seg_buf[4] = 10;
+ 221   4                  seg_buf[5] = 10;
+ 222   4                  seg_buf[6] = 10;
+ 223   4                  seg_buf[7] = 10;
+ 224   4                }
+ 225   3                break;
+ 226   3            }
+ 227   2            break; 
+ 228   2          // --- 参数界面 ----
+ 229   2          case 2:
+ 230   2            seg_buf[0] = 15;
+ 231   2            seg_buf[1] = seg_buf[2] = seg_buf[3] = seg_buf[4] = seg_buf[5] = 10;
+ 232   2            seg_buf[6] = temperature_p / 10;
+ 233   2            seg_buf[7] = temperature_p % 10;
+ 234   2            break; 
+ 235   2          // --- 温湿度界面 ----
+ 236   2          case 3:
+ 237   2            seg_buf[0] = 16;
+ 238   2            seg_buf[1] = seg_buf[2] = 10;
+ 239   2            // 温度数据
+ 240   2            seg_buf[3] = temperature / 10 % 10;
+C51 COMPILER V9.60.7.0   MAIN                                                              03/19/2026 22:52:55 PAGE 5   
+
+ 241   2            seg_buf[4] = temperature % 10;
+ 242   2            seg_buf[5] = 11;
+ 243   2            // 湿度数据有效
+ 244   2            if(humi != 255) {
+ 245   3              seg_buf[6] = humi / 10 % 10;
+ 246   3              seg_buf[7] = humi % 10;
+ 247   3            }
+ 248   2            // 湿度数据无效
+ 249   2            else {
+ 250   3              seg_buf[6] = seg_buf[7] = 17; // 显示AA
+ 251   3            }
+ 252   2            break; 
+ 253   2        }
+ 254   1      }
+ 255          
+ 256          /**
+ 257           * @brief LED任务函数
+ 258           */
+ 259          void led_task(void) {
+ 260   1        unsigned char i;
+ 261   1        
+ 262   1        // --- 界面指示灯 ---
+ 263   1        for(i = 0; i < 2; i++){
+ 264   2          ucled[i] = (i == seg_mode); // 对应界面点亮对应LED
+ 265   2        }
+ 266   1        ucled[2] = (seg_mode == 3);
+ 267   1        
+ 268   1        // -- 报警指示灯 ---
+ 269   1        ucled[3] = led_flag; // 采集温度大于温度参数时，指示灯LED4闪烁
+ 270   1        ucled[4] = (humi == 255); // 采集到无效湿度数据时，LED5点亮
+ 271   1        ucled[5] = data_flag; // 采集到的数据均升高时，LED5点亮
+ 272   1        
+ 273   1        led_disp(ucled);  
+ 274   1      }
+ 275          
+ 276          /**
+ 277           * @brief DS1302时钟任务函数
+ 278           */
+ 279          void rtc_task(void) {
+ 280   1        read_rtc(ucRTC);
+ 281   1      }
+ 282             
+ 283          /**
+ 284           * @brief AD/DA转换任务函数
+ 285           * @note  由于AD转换读取到的是上一次转换的数值，因此读取两个通道的数值时需要交换通道
+ 286           */
+ 287          void ad_da_task(void) {
+ 288   1        // 3s内不重复触发采集，直接返回
+ 289   1        if(cllct_lock_flag == 1) return; 
+ 290   1        
+ 291   1        volt_1_x100 = ad_read(0x43) * 100 / 51; // 读取光敏电阻电压值
+ 292   1        volt_2_x100 = ad_read(0x41) * 100 / 51; // 读取电位器电压值
+ 293   1        
+ 294   1        // 检测到状态为亮
+ 295   1        if(volt_1_x100 > 250) {
+ 296   2          lit_flag = 1; // 拉高标志位
+ 297   2        }
+ 298   1        // 检测到状态为暗
+ 299   1        else {
+ 300   2          lit_flag = 0; // 重置标志位
+ 301   2        }
+ 302   1        
+C51 COMPILER V9.60.7.0   MAIN                                                              03/19/2026 22:52:55 PAGE 6   
+
+ 303   1        // 从亮状态切换到暗状态
+ 304   1        if(lit_flag == 0 && lit_flag_old == 1) {
+ 305   2          cllct_flag = 1; // 触发温湿度采集
+ 306   2          cllct_lock_flag = 1; // 锁定采集
+ 307   2          timer_3s = 0;   // 重置3s计时
+ 308   2          seg_mode_rcd = seg_mode; // 记录切换前的界面
+ 309   2          seg_mode = 3;   // 切换到温湿度界面
+ 310   2        }
+ 311   1        
+ 312   1        lit_flag_old = lit_flag; // 更新上次亮暗状态
+ 313   1      }
+ 314          
+ 315          /**
+ 316           * @brief DS18B20温度转换任务函数
+ 317           */
+ 318          void temperature_task(void) {
+ 319   1        // 采集标志为低，直接返回
+ 320   1        if(cllct_flag == 0) return;
+ 321   1        
+ 322   1        // 采集标志为高，开始采集
+ 323   1        cllct_flag = 0; // 重置采集标志
+ 324   1        
+ 325   1        // 读取温度
+ 326   1        temperature = read_temperature();
+ 327   1        
+ 328   1        // 湿度数据无效
+ 329   1        if(freq < 200 || freq > 2000) {
+ 330   2          humi = 255; 
+ 331   2        }
+ 332   1        // --- 数据有效时才做记录 ---
+ 333   1        else {  
+ 334   2          cllct_num++;    // 采集次数+1
+ 335   2          memcpy(ucRTC_rcd, ucRTC, 2); // 记录采集时的时间
+ 336   2          
+ 337   2          // --- 温度数据处理 ---
+ 338   2          temperature_max = temperature > temperature_max ? temperature : temperature_max; // 计算最大温度 
+ 339   2          temperature_sum += temperature; // 计算温度总和
+ 340   2          temperature_ave_x10 = temperature_sum * 10 / cllct_num; // 计算平均温度
+ 341   2          
+ 342   2          // --- 湿度数据处理 ---
+ 343   2          humi = 8.0 / 180 * (freq - 200) + 10;
+ 344   2          humi_max = humi > humi_max ? humi : humi_max; // 计算最大湿度 
+ 345   2          humi_sum += humi; // 计算湿度总和
+ 346   2          humi_ave_x10 = humi_sum * 10 / cllct_num; // 计算平均湿度
+ 347   2        }
+ 348   1        
+ 349   1        // 当采集到的数据均升高时，拉高标志位
+ 350   1        if(cllct_num >= 2 && temperature > temperature_rcd && humi > humi_rcd && humi != 255) {
+ 351   2          data_flag = 1;
+ 352   2        }
+ 353   1        else {
+ 354   2          data_flag = 0;
+ 355   2        }
+ 356   1        
+ 357   1        // 更新上一次采集到的数据记录
+ 358   1        temperature_rcd = temperature;
+ 359   1        humi_rcd = humi;
+ 360   1      }
+ 361          
+ 362          /* Timer 0 - NE555 */
+ 363          /**
+ 364           * @brief Timer 0初始化函数
+C51 COMPILER V9.60.7.0   MAIN                                                              03/19/2026 22:52:55 PAGE 7   
+
+ 365           * @note  初始化NE555
+ 366           */
+ 367          void timer0_init(void)    
+ 368          {
+ 369   1        AUXR &= 0x7F;     //定时器时钟12T模式
+ 370   1        TMOD &= 0xF0;     //设置定时器模式
+ 371   1        TMOD |= 0x05;     //设置定时器0为16位不自动重装载计数模式
+ 372   1        TL0 = 0x00;       //设置定时初始值
+ 373   1        TH0 = 0x00;       //设置定时初始值
+ 374   1        TF0 = 0;        //清除TF0标志
+ 375   1        TR0 = 1;        //定时器0开始计数
+ 376   1      }
+ 377          
+ 378          /* Timer 1 */
+ 379          /**
+ 380           * @brief Timer 1初始化函数
+ 381           */
+ 382          void timer1_init(void)    //1毫秒@12.000MHz
+ 383          {
+ 384   1        AUXR &= 0xBF;     //定时器时钟12T模式
+ 385   1        TMOD &= 0x0F;     //设置定时器模式
+ 386   1        TL1 = 0x18;       //设置定时初始值
+ 387   1        TH1 = 0xFC;       //设置定时初始值
+ 388   1        TF1 = 0;        //清除TF1标志
+ 389   1        TR1 = 1;        //定时器1开始计时
+ 390   1        ET1 = 1;        // 使能定时器1中断
+ 391   1        EA = 1;         // 使能全局中断
+ 392   1      }
+ 393          
+ 394          /**
+ 395           * @brief Timer 1中断服务函数
+ 396           */
+ 397          void timer1_server(void) interrupt 3 {
+ 398   1        // --- 系统时钟 ---
+ 399   1        uwTick++;   
+ 400   1        
+ 401   1        // --- 按键 ---
+ 402   1        if(key_flag) {
+ 403   2          if(++timer_2s >= 2000) {
+ 404   3            timer_2s = 2000; // 将计时钳位在2000 
+ 405   3          }
+ 406   2        }
+ 407   1        
+ 408   1        // --- 数码管 ---
+ 409   1        seg_pos = (++seg_pos) % 8; // 数码管位置索引在 0-7 之间循环切换
+ 410   1        if(seg_buf[seg_pos] > 20) seg_disp(seg_pos, seg_buf[seg_pos] - '.', 1); // 显示小数点
+ 411   1        else seg_disp(seg_pos, seg_buf[seg_pos], 0); // 熄灭小数点
+ 412   1        
+ 413   1        // --- LED ---
+ 414   1        // 采集温度大于温度参数时，开始计时
+ 415   1        if(temperature > temperature_p) { 
+ 416   2          // 每计时100ms翻转LED状态
+ 417   2          if(++timer_100ms >= 100) {
+ 418   3            timer_100ms = 0;
+ 419   3            led_flag ^= 1;  
+ 420   3          }
+ 421   2        }
+ 422   1        // 采集温度小于等于温度参数时，LED熄灭
+ 423   1        else {
+ 424   2          timer_100ms = 0;
+ 425   2          led_flag = 0;
+ 426   2        }
+C51 COMPILER V9.60.7.0   MAIN                                                              03/19/2026 22:52:55 PAGE 8   
+
+ 427   1        
+ 428   1        // --- Freq ---
+ 429   1        // 计时1秒，读取频率值
+ 430   1        if(++timer_1s >= 1000) {
+ 431   2          timer_1s = 0; // 重置计时
+ 432   2          TR0 = 0; // 停止定时器0计数
+ 433   2          freq = (TH0 << 8) | TL0; // 读取频率值
+ 434   2          TL0 = TH0 = 0; // 重置计数初值
+ 435   2          TR0 = 1; // 开启定时器0计数
+ 436   2        }
+ 437   1        
+ 438   1        // --- 温湿度采集 ---
+ 439   1        if(cllct_lock_flag == 1) {
+ 440   2          timer_3s++;
+ 441   2          // 3秒时间到
+ 442   2          if(timer_3s >= 3000) {
+ 443   3            cllct_lock_flag = 0; // 解除采集锁定
+ 444   3            timer_3s = 0;
+ 445   3            seg_mode = seg_mode_rcd; // 返回切换前的界面
+ 446   3          }
+ 447   2        }
+ 448   1      }
+ 449          
+ 450          // *** 调度器 *** //
+ 451          
+ 452          /* 调度器任务结构体定义 */
+ 453          typedef struct {
+ 454            void (*task_func)(void);  // 任务函数
+ 455            unsigned long int prd_ms; // 任务执行周期
+ 456            unsigned long int lst_ms; // 上次任务函数执行的时间
+ 457          } task_t;
+ 458          
+ 459          /* 调度器任务函数列表数组 */
+ 460          idata task_t scheduler_task[] = {
+ 461            {key_task, 10, 0},
+ 462            {seg_task, 200, 0},
+ 463            {led_task, 1, 0},
+ 464            {rtc_task, 200, 0},
+ 465            {ad_da_task, 200, 0},
+ 466            {temperature_task, 200, 0},
+ 467          };
+ 468          
+ 469          /**
+ 470           * @brief 调度器初始化函数
+ 471           * @note  获取调度器任务函数数量
+ 472           */
+ 473          void scheduler_init(void) {
+ 474   1        task_num = sizeof(scheduler_task) / sizeof(task_t);
+ 475   1      }
+ 476          
+ 477          /**
+ 478           * @brief 调度器任务调度函数
+ 479           * @note  时间片轮询调度任务函数
+ 480           */
+ 481          void scheduler_run(void) {
+ 482   1        unsigned char i;
+ 483   1        
+ 484   1        for(i = 0; i < task_num; i++) {
+ 485   2          unsigned long int now_time = uwTick; // 获取当前系统时间
+ 486   2          if(now_time - scheduler_task[i].lst_ms >= scheduler_task[i].prd_ms) {
+ 487   3            scheduler_task[i].lst_ms = now_time; // 更新任务函数上次执行时间
+ 488   3            scheduler_task[i].task_func(); // 执行任务函数
+C51 COMPILER V9.60.7.0   MAIN                                                              03/19/2026 22:52:55 PAGE 9   
+
+ 489   3          }     
+ 490   2        }   
+ 491   1      }
+ 492          
+ 493          void main(void) {
+ 494   1        sys_init();
+ 495   1        write_rtc(ucRTC); // 写入时钟
+ 496   1        read_temperature(); // 上电时读一下温度，防止后面读到85度
+ 497   1        timer0_init();
+ 498   1        timer1_init();
+ 499   1        scheduler_init();
+ 500   1        while(1) {
+ 501   2          scheduler_run();
+ 502   2        }
+ 503   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   1623    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =     19    ----
+   DATA SIZE        =     20       5
+   IDATA SIZE       =     90    ----
+   BIT SIZE         =      7    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

@@ -1,0 +1,118 @@
+C51 COMPILER V9.60.7.0   DS1302                                                            03/19/2026 18:37:01 PAGE 1   
+
+
+C51 COMPILER V9.60.7.0, COMPILATION OF MODULE DS1302
+OBJECT MODULE PLACED IN .\Objects\ds1302.obj
+COMPILER INVOKED BY: C:\AAA\C51\BIN\C51.EXE ..\src\driver\ds1302.c OPTIMIZE(8,SPEED) BROWSE INCDIR(..\src\driver) DEBUG 
+                    -OBJECTEXTEND PRINT(.\Listings\ds1302.lst) TABS(2) OBJECT(.\Objects\ds1302.obj)
+
+line level    source
+
+   1          /*  #   DS1302代码片段说明
+   2            1.  本文件夹中提供的驱动代码供参赛选手完成程序设计参考。
+   3            2.  参赛选手可以自行编写相关代码或以该代码为基础，根据所选单片机类型、运行速度和试题
+   4              中对单片机时钟频率的要求，进行代码调试和修改。
+   5          */                
+   6          
+   7          #include "ds1302.h"
+   8          
+   9          sbit RST = P1^3; // 复位/使能端 
+  10          sbit SCK = P1^7; // 串行时钟线
+  11          sbit SDA = P2^3; // 串行数据线 
+  12          
+  13          //
+  14          void Write_Ds1302(unsigned  char temp) 
+  15          {
+  16   1        unsigned char i;
+  17   1        for (i=0;i<8;i++)       
+  18   1        { 
+  19   2          SCK = 0;
+  20   2          SDA = temp&0x01;
+  21   2          temp>>=1; 
+  22   2          SCK=1;
+  23   2        }
+  24   1      }   
+  25          
+  26          //
+  27          void Write_Ds1302_Byte( unsigned char address,unsigned char dat )     
+  28          {
+  29   1        RST=0;  _nop_();
+  30   1        SCK=0;  _nop_();
+  31   1        RST=1;  _nop_();  
+  32   1        Write_Ds1302(address);  
+  33   1        Write_Ds1302(dat);    
+  34   1        RST=0; 
+  35   1      }
+  36          
+  37          //
+  38          unsigned char Read_Ds1302_Byte ( unsigned char address )
+  39          {
+  40   1        unsigned char i,temp=0x00;
+  41   1        RST=0;  _nop_();
+  42   1        SCK=0;  _nop_();
+  43   1        RST=1;  _nop_();
+  44   1        Write_Ds1302(address);
+  45   1        for (i=0;i<8;i++)   
+  46   1        {   
+  47   2          SCK=0;
+  48   2          temp>>=1; 
+  49   2          if(SDA)
+  50   2          temp|=0x80; 
+  51   2          SCK=1;
+  52   2        } 
+  53   1        RST=0;  _nop_();
+  54   1        SCK=0;  _nop_();
+C51 COMPILER V9.60.7.0   DS1302                                                            03/19/2026 18:37:01 PAGE 2   
+
+  55   1        SCK=1;  _nop_();
+  56   1        SDA=0;  _nop_();
+  57   1        SDA=1;  _nop_();
+  58   1        return (temp);      
+  59   1      }
+  60          
+  61          /**
+  62           * @brief  DS1302写入时间函数
+  63           * @param  ucRTC 指向待写入时间数组的指针(格式: [0]-时, [1]-分, [2]-秒)
+  64           * @note   DS1302内部使用 BCD 码存储，写入前需将十进制转换为BCD码
+  65           */
+  66          void write_rtc(unsigned char *ucRTC) {
+  67   1        unsigned char i;
+  68   1        
+  69   1        Write_Ds1302_Byte(0x8e,0x00); // 解除写保护
+  70   1        Write_Ds1302_Byte(0x80,0x80); // 停止时钟
+  71   1        for(i = 0; i < 3; i++) {
+  72   2          Write_Ds1302_Byte(0x84 - i*2, ucRTC[i] / 10 * 16 + ucRTC[i] % 10); 
+  73   2        }
+  74   1        Write_Ds1302_Byte(0x8e,0x80); // 开启写保护
+  75   1      }
+  76          
+  77          /**
+  78           * @brief  DS1302读取时间函数
+  79           * @param  ucRTC 指向存储时间结果数组的指针
+  80           * @note   读取出的数据为BCD码，需转换为十进制以便数码管显示
+  81           */
+  82          void read_rtc(unsigned char *ucRTC) {
+  83   1        unsigned char temp;
+  84   1        unsigned char i;
+  85   1        
+  86   1        EA = 0; // 屏蔽中断，防止 SPI 模拟时序被中断打断导致读取错误
+  87   1        for(i = 0; i < 3; i++) {
+  88   2          temp = Read_Ds1302_Byte(0x85 - 2*i);
+  89   2          ucRTC[i] = temp / 16 * 10 + temp % 16; 
+  90   2        }
+  91   1        EA = 1; // 恢复中断
+  92   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    224    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =   ----       6
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)
