@@ -1,0 +1,547 @@
+C51 COMPILER V9.60.7.0   MAIN                                                              03/21/2026 13:07:22 PAGE 1   
+
+
+C51 COMPILER V9.60.7.0, COMPILATION OF MODULE MAIN
+OBJECT MODULE PLACED IN .\Objects\main.obj
+COMPILER INVOKED BY: C:\AAA\C51\BIN\C51.EXE ..\src\user\main.c OPTIMIZE(8,SPEED) BROWSE INCDIR(..\src\driver) DEBUG OBJE
+                    -CTEXTEND PRINT(.\Listings\main.lst) TABS(2) OBJECT(.\Objects\main.obj)
+
+line level    source
+
+   1          #include <STC15F2K60S2.H>
+   2          #include <string.h>
+   3          #include "sys.h"
+   4          #include "seg.h"
+   5          #include "key.h"
+   6          #include "led.h"
+   7          #include "ds1302.h"
+   8          #include "iic.h"
+   9          #include "onewire.h"
+  10          
+  11          // ** ²ÎÊý¶¨ÒåÇø ** //
+  12          
+  13          /* scheduler */
+  14          idata unsigned long int uwTick; // ÏµÍ³¼ÆÊ±
+  15          idata unsigned char task_num; // µ÷¶ÈÆ÷ÈÎÎñº¯ÊýÊýÁ¿
+  16          
+  17          /* key */ 
+  18          idata unsigned char key_val, key_down, key_up, key_old; // °´¼ü×´Ì¬£¬Ë²Ê±×´Ì¬¡¢ÏÂ½µÑØ¡¢ÉÏÉýÑØ¡¢ÉÏ´Î×´Ì¬
+  19          bit key_flag; // ³¤°´¼ÆÊ±±êÖ¾
+  20          unsigned int timer_2s; // ws¼ÆÊ±
+  21          
+  22          /* seg */
+  23          pdata unsigned char seg_buf[8] = {10, 10, 10, 10, 10, 10, 10, 10}; // ÊýÂë¹Ü×´Ì¬»º´æÊý×é£¬³õÊ¼»¯ÎªÏ¨Ãð
+  24          idata unsigned char seg_pos; // ÊýÂë¹ÜÎ»ÖÃË÷Òý
+  25          idata unsigned char seg_mode; // ÊýÂë¹ÜÏÔÊ¾Ä£Ê½£¬0-Ê±¼ä£¬1-»ØÏÔ£¬2-²ÎÊý
+  26          unsigned char seg_mode_rcd; // ÊýÂë¹ÜÏÔÊ¾Ä£Ê½¼ÇÂ¼
+  27          idata unsigned char rtn_mode; // »ØÏÔÄ£Ê½£¬0-ÎÂ¶È£¬1-Êª¶È£¬2-Ê±¼ä
+  28          
+  29          /* LED */
+  30          pdata unsigned char ucled[8] = {0, 0, 0, 0, 0, 0, 0, 0}; // LED×´Ì¬»º´æÊý×é£¬³õÊ¼»¯ÎªÏ¨Ãð
+  31          bit led_flag; // LEDÉÁË¸±êÖ¾
+  32          unsigned char timer_100ms; // 100ms¼ÆÊ±
+  33          
+  34          /* RTC */
+  35          pdata unsigned char ucRTC[3] = {23, 59, 55}; // Ê±ÖÓÊý¾Ý»º´æÊý×é
+  36          unsigned char ucRTC_rcd[2] = {00, 00}; // ²É¼¯Ê±¼äÊý¾Ý»º´æÊý×é  
+  37          
+  38          /* AD/DA */
+  39          idata unsigned int volt_1_x100; // ¹âÃôµç×èµçÑ¹Öµx100
+  40          bit lit_flag = 0, lit_flag_old = 0; // µ±Ç°/ÉÏ´ÎÁÁ°µ×´Ì¬ 0-°µ 1-ÁÁ
+  41          idata unsigned int timer_3s; // 3s¼ÆÊ±
+  42          bit cllct_flag = 0; // Êý¾Ý²É¼¯±êÖ¾
+  43          bit cllct_lock_flag = 0; // Êý¾Ý²É¼¯Ëø¶¨±êÖ¾(·ÀÖ¹3sÄÚÖØ¸´²É¼¯)
+  44          unsigned char cllct_num = 0; // ²É¼¯´ÎÊý
+  45          
+  46          /* Temperature */
+  47          idata unsigned char temperature; // ÎÂ¶ÈÖµ
+  48          idata unsigned char humi; // Êª¶ÈÖµ
+  49          unsigned char temperature_cllct; // ÎÂ¶È²É¼¯Öµ
+  50          unsigned char humi_cllct; // Êª¶È²É¼¯Öµ
+  51          bit valid_flag = 0; // Êý¾ÝÓÐÐ§±êÖ¾
+  52          unsigned char temperature_rcd; // ÉÏ´ÎÎÂ¶ÈÖµ
+  53          unsigned char humi_rcd; // ÉÏ´ÎÊª¶ÈÖµ
+  54          unsigned char temperature_p = 30; // ÎÂ¶È²ÎÊý
+C51 COMPILER V9.60.7.0   MAIN                                                              03/21/2026 13:07:22 PAGE 2   
+
+  55          unsigned char temperature_max; // ×î´óÎÂ¶È
+  56          unsigned int temperature_ave_x10; // Æ½¾ùÎÂ¶Èx10
+  57          unsigned int temperature_sum; // ÎÂ¶È×ÜºÍ
+  58          unsigned char humi_max;        // ×î´óÊª¶È
+  59          unsigned int humi_ave_x10;        // Æ½¾ùÊª¶Èx10
+  60          unsigned int humi_sum;        // Êª¶È×ÜºÍ
+  61          bit data_flag = 0; // Êý¾Ý±êÖ¾Î»(ÓÃÓÚÅÐ¶ÏÊý¾ÝÊÇ·ñÉý¸ß)
+  62          
+  63          /* Freq */
+  64          idata unsigned int freq; // ÆµÂÊÖµ
+  65          idata unsigned int timer_1s; // 1s¼ÆÊ±                           
+  66          
+  67          /* other parameters */
+  68          
+  69          
+  70          // ** º¯Êý¶¨ÒåÇø ** //
+  71          
+  72          /**
+  73           * @brief °´¼ü×´Ì¬»úÈÎÎñº¯Êý
+  74           * @note  ÀûÓÃÎ»ÔËËã½øÐÐ±ßÑØ¼ì²â
+  75           */
+  76          void key_task(void) {
+  77   1        // ÎÂÊª¶È½çÃæÏÂ£¬ËùÓÐ°´¼üÎÞÐ§£¬Ö±½Ó·µ»Ø
+  78   1        if(seg_mode == 3) return;
+  79   1        
+  80   1        key_val = key_read(); // »ñÈ¡µ±Ç°°´¼ü×´Ì¬
+  81   1        key_down = key_val & (key_val ^ key_old); // »ñÈ¡°´¼üÏÂ½µÑØ×´Ì¬
+  82   1        key_up = ~key_val & (key_val ^ key_old);  // »ñÈ¡°´¼üÉÏÉýÑØ×´Ì¬
+  83   1        key_old = key_val; // ¸üÐÂÉÏÒ»´Î°´¼ü×´Ì¬
+  84   1        
+  85   1        switch(key_down) {
+  86   2          // --- ½çÃæ°´¼ü --- 
+  87   2          case 4:
+  88   2            seg_mode = (seg_mode + 1) % 3; 
+  89   2            // Ã¿´Î´ÓÊ±¼ä½çÃæÇÐ»»µ½»ØÏÔ½çÃæÊ±£¬´¦ÓÚÎÂ¶È»ØÏÔ½çÃæ
+  90   2            if(seg_mode == 1) {
+  91   3              rtn_mode = 0;
+  92   3            }
+  93   2            break;  
+  94   2          // --- »ØÏÔ°´¼ü --- 
+  95   2          case 5:
+  96   2            // Ö»ÔÚ»ØÏÔ½çÃæÉúÐ§
+  97   2            if(seg_mode == 1)
+  98   2              rtn_mode = (rtn_mode + 1) % 3; 
+  99   2            break;  
+ 100   2          // --- + °´¼ü --- 
+ 101   2          case 8:
+ 102   2            // Ö»ÔÚ²ÎÊý½çÃæÉúÐ§
+ 103   2            if(seg_mode == 2) {
+ 104   3              if(++temperature_p > 99) {
+ 105   4                temperature_p = 0;
+ 106   4              }
+ 107   3            }
+ 108   2            break;  
+ 109   2          // --- - °´¼ü --- 
+ 110   2          case 9:
+ 111   2            // Ö»ÔÚ²ÎÊý½çÃæÉúÐ§
+ 112   2            if(seg_mode == 2) {
+ 113   3              if(--temperature_p > 200) {
+ 114   4                temperature_p = 99;
+ 115   4              }
+ 116   3            }
+C51 COMPILER V9.60.7.0   MAIN                                                              03/21/2026 13:07:22 PAGE 3   
+
+ 117   2            break;  
+ 118   2        }
+ 119   1        
+ 120   1        // --- °´¼ü9 ³¤°´¹¦ÄÜ ---
+ 121   1        // Ö»ÔÚÊ±¼ä»ØÏÔ½çÃæÉúÐ§
+ 122   1        if(seg_mode == 1 && rtn_mode == 2) {
+ 123   2          // ¼ì²âµ½°´¼ü9°´ÏÂ
+ 124   2          if(key_down == 9) {
+ 125   3            key_flag = 1; // ¿ªÊ¼³¤°´¼ÆÊ± 
+ 126   3          }
+ 127   2          // ¼ì²âµ½°´¼ü9ËÉ¿ª
+ 128   2          if(key_up == 9) {
+ 129   3            // ³¤°´´ïµ½2s,Çå³ýËùÓÐ¼ÇÂ¼µÄÊý¾Ý
+ 130   3            if(timer_2s >= 2000) {
+ 131   4              temperature_max = 0; 
+ 132   4              temperature_ave_x10 = 0;  
+ 133   4              temperature_sum = 0;  
+ 134   4              humi_max = 0;        
+ 135   4              humi_ave_x10 = 0;        
+ 136   4              humi_sum = 0;  
+ 137   4              memset(ucRTC_rcd, 0, 2);
+ 138   4              cllct_num = 0;        
+ 139   4            } 
+ 140   3            key_flag = 0; // ÖØÖÃ³¤°´¼ÆÊ±±êÖ¾ 
+ 141   3            timer_2s = 0; // ÖØÖÃ¼ÆÊ±   
+ 142   3          }
+ 143   2        }
+ 144   1      }
+ 145          
+ 146          /**
+ 147           * @brief ÊýÂë¹ÜÏÔÊ¾ÈÎÎñº¯Êý
+ 148           * @note  ÐèÒªÏÔÊ¾Ð¡ÊýµãÊ±£¬ÔÚÖµºó¼ÓÉÏ'.'
+ 149           */
+ 150          void seg_task(void) { 
+ 151   1        switch(seg_mode) {
+ 152   2          // --- Ê±¼ä½çÃæ ----
+ 153   2          case 0:
+ 154   2            seg_buf[2] = seg_buf[5] = 11; // ÏÔÊ¾¶ÌºáÏß"-"
+ 155   2            seg_buf[0] = ucRTC[0] / 10; // ÏÔÊ¾Ê±
+ 156   2            seg_buf[1] = ucRTC[0] % 10;
+ 157   2            seg_buf[3] = ucRTC[1] / 10; // ÏÔÊ¾·Ö
+ 158   2            seg_buf[4] = ucRTC[1] % 10;
+ 159   2            seg_buf[6] = ucRTC[2] / 10; // ÏÔÊ¾Ãë
+ 160   2            seg_buf[7] = ucRTC[2] % 10;
+ 161   2            break;
+ 162   2          // --- »ØÏÔ½çÃæ ----
+ 163   2          case 1:
+ 164   2            seg_buf[0] = 12 + rtn_mode; // ÏÔÊ¾×ÖÄ¸
+ 165   2            switch(rtn_mode) {
+ 166   3              // -- ÎÂ¶È»ØÏÔ --
+ 167   3              case 0:
+ 168   3                seg_buf[1] = 10;
+ 169   3                // ´¥·¢´ÎÊý²»Îª0²ÅÏÔÊ¾
+ 170   3                if(cllct_num > 0) {
+ 171   4                  seg_buf[2] = temperature_max / 10 % 10;
+ 172   4                  seg_buf[3] = temperature_max % 10;
+ 173   4                  seg_buf[4] = 11;
+ 174   4                  seg_buf[5] = temperature_ave_x10 / 100 % 10;
+ 175   4                  seg_buf[6] = temperature_ave_x10 / 10 % 10 + '.';
+ 176   4                  seg_buf[7] = temperature_ave_x10 % 10;
+ 177   4                }
+ 178   3                else {
+C51 COMPILER V9.60.7.0   MAIN                                                              03/21/2026 13:07:22 PAGE 4   
+
+ 179   4                  seg_buf[2] = 10;
+ 180   4                  seg_buf[3] = 10;
+ 181   4                  seg_buf[4] = 10;
+ 182   4                  seg_buf[5] = 10;
+ 183   4                  seg_buf[6] = 10;
+ 184   4                  seg_buf[7] = 10;
+ 185   4                }
+ 186   3                break;
+ 187   3              // -- Êª¶È»ØÏÔ --
+ 188   3              case 1:
+ 189   3                seg_buf[1] = 10;
+ 190   3                // ´¥·¢´ÎÊý²»Îª0²ÅÏÔÊ¾  
+ 191   3                if(cllct_num > 0) {
+ 192   4                  seg_buf[2] = humi_max / 10 % 10;
+ 193   4                  seg_buf[3] = humi_max % 10;
+ 194   4                  seg_buf[4] = 11;
+ 195   4                  seg_buf[5] = humi_ave_x10 / 100 % 10;
+ 196   4                  seg_buf[6] = humi_ave_x10 / 10 % 10 + '.';
+ 197   4                  seg_buf[7] = humi_ave_x10 % 10;
+ 198   4                }
+ 199   3                else {
+ 200   4                  seg_buf[2] = 10;
+ 201   4                  seg_buf[3] = 10;
+ 202   4                  seg_buf[4] = 10;
+ 203   4                  seg_buf[5] = 10;
+ 204   4                  seg_buf[6] = 10;
+ 205   4                  seg_buf[7] = 10;
+ 206   4                }
+ 207   3                break;
+ 208   3              // -- Ê±¼ä»ØÏÔ --
+ 209   3              case 2:
+ 210   3                seg_buf[1] = cllct_num / 10 % 10;
+ 211   3                seg_buf[2] = cllct_num % 10;
+ 212   3                // ´¥·¢´ÎÊý²»Îª0²ÅÏÔÊ¾
+ 213   3                if(cllct_num > 0) {
+ 214   4                  seg_buf[3] = ucRTC_rcd[0] / 10; // ÏÔÊ¾Ê±
+ 215   4                  seg_buf[4] = ucRTC_rcd[0] % 10;
+ 216   4                  seg_buf[5] = 11;            // ÏÔÊ¾¶ÌºáÏß"-"
+ 217   4                  seg_buf[6] = ucRTC_rcd[1] / 10; // ÏÔÊ¾·Ö
+ 218   4                  seg_buf[7] = ucRTC_rcd[1] % 10;      
+ 219   4                }
+ 220   3                else {
+ 221   4                  seg_buf[3] = 10;
+ 222   4                  seg_buf[4] = 10;
+ 223   4                  seg_buf[5] = 10;
+ 224   4                  seg_buf[6] = 10;
+ 225   4                  seg_buf[7] = 10;
+ 226   4                }
+ 227   3                break;
+ 228   3            }
+ 229   2            break; 
+ 230   2          // --- ²ÎÊý½çÃæ ----
+ 231   2          case 2:
+ 232   2            seg_buf[0] = 15;
+ 233   2            seg_buf[1] = seg_buf[2] = seg_buf[3] = seg_buf[4] = seg_buf[5] = 10;
+ 234   2            seg_buf[6] = temperature_p / 10;
+ 235   2            seg_buf[7] = temperature_p % 10;
+ 236   2            break; 
+ 237   2          // --- ÎÂÊª¶È½çÃæ ----
+ 238   2          case 3:
+ 239   2            seg_buf[0] = 16;
+ 240   2            seg_buf[1] = seg_buf[2] = 10;
+C51 COMPILER V9.60.7.0   MAIN                                                              03/21/2026 13:07:22 PAGE 5   
+
+ 241   2            // ÎÂ¶ÈÊý¾Ý
+ 242   2            seg_buf[3] = temperature_cllct / 10 % 10;
+ 243   2            seg_buf[4] = temperature_cllct % 10;
+ 244   2            seg_buf[5] = 11;
+ 245   2            // Êª¶ÈÊý¾ÝÓÐÐ§
+ 246   2            if(valid_flag) {
+ 247   3              seg_buf[6] = humi_cllct / 10 % 10;
+ 248   3              seg_buf[7] = humi_cllct % 10;
+ 249   3            }
+ 250   2            // Êª¶ÈÊý¾ÝÎÞÐ§
+ 251   2            else {
+ 252   3              seg_buf[6] = seg_buf[7] = 17; // ÏÔÊ¾AA
+ 253   3            }
+ 254   2            break; 
+ 255   2        }
+ 256   1      }
+ 257          
+ 258          /**
+ 259           * @brief LEDÈÎÎñº¯Êý
+ 260           */
+ 261          void led_task(void) {
+ 262   1        unsigned char i;
+ 263   1        
+ 264   1        // --- ½çÃæÖ¸Ê¾µÆ ---
+ 265   1        for(i = 0; i < 2; i++){
+ 266   2          ucled[i] = (i == seg_mode); // ¶ÔÓ¦½çÃæµãÁÁ¶ÔÓ¦LED
+ 267   2        }
+ 268   1        ucled[2] = (seg_mode == 3);
+ 269   1        
+ 270   1        // -- ±¨¾¯Ö¸Ê¾µÆ ---
+ 271   1        ucled[3] = led_flag; // ²É¼¯ÎÂ¶È´óÓÚÎÂ¶È²ÎÊýÊ±£¬Ö¸Ê¾µÆLED4ÉÁË¸
+ 272   1        ucled[4] = (humi_cllct == 255); // ²É¼¯µ½ÎÞÐ§Êª¶ÈÊý¾ÝÊ±£¬LED5µãÁÁ
+ 273   1        ucled[5] = data_flag; // ²É¼¯µ½µÄÊý¾Ý¾ùÉý¸ßÊ±£¬LED5µãÁÁ
+ 274   1        
+ 275   1        led_disp(ucled);  
+ 276   1      }
+ 277          
+ 278          /**
+ 279           * @brief DS1302Ê±ÖÓÈÎÎñº¯Êý
+ 280           */
+ 281          void rtc_task(void) {
+ 282   1        read_rtc(ucRTC);
+ 283   1      }
+ 284             
+ 285          /**
+ 286           * @brief AD/DA×ª»»ÈÎÎñº¯Êý
+ 287           * @note  ÓÉÓÚAD×ª»»¶ÁÈ¡µ½µÄÊÇÉÏÒ»´Î×ª»»µÄÊýÖµ£¬Òò´Ë¶ÁÈ¡Á½¸öÍ¨µÀµÄÊýÖµÊ±ÐèÒª½»»»Í¨µÀ
+ 288           */
+ 289          void ad_da_task(void) {
+ 290   1        // 3sÄÚ²»ÖØ¸´´¥·¢²É¼¯£¬Ö±½Ó·µ»Ø
+ 291   1        if(cllct_lock_flag == 1) return; 
+ 292   1        
+ 293   1        volt_1_x100 = ad_read(0x41) * 100 / 51; // ¶ÁÈ¡¹âÃôµç×èµçÑ¹Öµ
+ 294   1        
+ 295   1        // ¼ì²âµ½×´Ì¬ÎªÁÁ
+ 296   1        if(volt_1_x100 > 250) {
+ 297   2          lit_flag = 1; // À­¸ß±êÖ¾Î»
+ 298   2        }
+ 299   1        // ¼ì²âµ½×´Ì¬Îª°µ
+ 300   1        else {
+ 301   2          lit_flag = 0; // ÖØÖÃ±êÖ¾Î»
+ 302   2        }
+C51 COMPILER V9.60.7.0   MAIN                                                              03/21/2026 13:07:22 PAGE 6   
+
+ 303   1        
+ 304   1        // ´ÓÁÁ×´Ì¬ÇÐ»»µ½°µ×´Ì¬
+ 305   1        if(lit_flag == 0 && lit_flag_old == 1) {
+ 306   2          cllct_flag = 1; // ´¥·¢ÎÂÊª¶È²É¼¯
+ 307   2          cllct_lock_flag = 1; // ²É¼¯Ëø¶¨
+ 308   2          timer_3s = 0;   // ÖØÖÃ3s¼ÆÊ±
+ 309   2          
+ 310   2          seg_mode_rcd = seg_mode; // ¼ÇÂ¼ÇÐ»»Ç°µÄ½çÃæ
+ 311   2          seg_mode = 3;   // ÇÐ»»µ½ÎÂÊª¶È½çÃæ
+ 312   2          
+ 313   2          temperature_cllct = temperature; // ÎÂ¶ÈÊ¼ÖÕÐèÒª²É¼¯
+ 314   2          humi_cllct = humi;
+ 315   2          
+ 316   2          // ´¥·¢²É¼¯£¬¶ÔÓÐÐ§Êý¾Ý½øÐÐ´¦Àí
+ 317   2          if(valid_flag == 1 && cllct_flag == 1) {    
+ 318   3            cllct_num++; // ²É¼¯´ÎÊý+1
+ 319   3            memcpy(ucRTC_rcd, ucRTC, 2); // ¼ÇÂ¼²É¼¯Ê±µÄÊ±¼ä
+ 320   3            
+ 321   3            // --- ÎÂ¶ÈÊý¾Ý´¦Àí ---
+ 322   3            temperature_max = temperature_cllct > temperature_max ? temperature_cllct : temperature_max; // ¼ÆËã×
+             -î´óÎÂ¶È 
+ 323   3            temperature_sum += temperature_cllct; // ¼ÆËãÎÂ¶È×ÜºÍ
+ 324   3            temperature_ave_x10 = temperature_sum * 10 / cllct_num; // ¼ÆËãÆ½¾ùÎÂ¶È
+ 325   3            
+ 326   3            // --- Êª¶ÈÊý¾Ý´¦Àí ---  
+ 327   3            humi_max = humi_cllct > humi_max ? humi_cllct : humi_max; // ¼ÆËã×î´óÊª¶È 
+ 328   3            humi_sum += humi_cllct; // ¼ÆËãÊª¶È×ÜºÍ
+ 329   3            humi_ave_x10 = humi_sum * 10 / cllct_num; // ¼ÆËãÆ½¾ùÊª¶È
+ 330   3            
+ 331   3            // µ±²É¼¯µ½µÄÊý¾Ý¾ùÉý¸ßÊ±£¬À­¸ß±êÖ¾Î»
+ 332   3            if(cllct_num >= 2 && temperature_cllct > temperature_rcd && humi_cllct > humi_rcd) {
+ 333   4              data_flag = 1;
+ 334   4            }
+ 335   3            else {
+ 336   4              data_flag = 0;
+ 337   4            }
+ 338   3            
+ 339   3            // ¸üÐÂÉÏÒ»´Î²É¼¯µ½µÄÊý¾Ý¼ÇÂ¼
+ 340   3            temperature_rcd = temperature_cllct;
+ 341   3            humi_rcd = humi_cllct;
+ 342   3          }
+ 343   2        } 
+ 344   1        
+ 345   1        lit_flag_old = lit_flag; // ¸üÐÂÉÏ´ÎÁÁ°µ×´Ì¬
+ 346   1      }
+ 347          
+ 348          /**
+ 349           * @brief DS18B20ÎÂ¶È×ª»»ÈÎÎñº¯Êý
+ 350           */
+ 351          void temperature_task(void) { 
+ 352   1        // ¶ÁÈ¡ÎÂ¶È
+ 353   1        temperature = read_temperature();
+ 354   1        
+ 355   1        // Êª¶ÈÊý¾ÝÎÞÐ§
+ 356   1        if(freq < 200 || freq > 2000) {   
+ 357   2          humi = 255;
+ 358   2          valid_flag = 0;
+ 359   2        }
+ 360   1        // Êª¶ÈÊý¾ÝÓÐÐ§
+ 361   1        else {  
+ 362   2          humi = 8 * (freq - 200) / 180 + 10; // ¶ÁÈ¡Êª¶ÈÊý¾Ý
+ 363   2          valid_flag = 1;
+C51 COMPILER V9.60.7.0   MAIN                                                              03/21/2026 13:07:22 PAGE 7   
+
+ 364   2        }
+ 365   1      }
+ 366          
+ 367          /* Timer 0 - NE555 */
+ 368          /**
+ 369           * @brief Timer 0³õÊ¼»¯º¯Êý
+ 370           * @note  ³õÊ¼»¯NE555
+ 371           */
+ 372          void timer0_init(void)    
+ 373          {
+ 374   1        AUXR &= 0x7F;     //¶¨Ê±Æ÷Ê±ÖÓ12TÄ£Ê½
+ 375   1        TMOD &= 0xF0;     //ÉèÖÃ¶¨Ê±Æ÷Ä£Ê½
+ 376   1        TMOD |= 0x05;     //ÉèÖÃ¶¨Ê±Æ÷0Îª16Î»²»×Ô¶¯ÖØ×°ÔØ¼ÆÊýÄ£Ê½
+ 377   1        TL0 = 0x00;       //ÉèÖÃ¶¨Ê±³õÊ¼Öµ
+ 378   1        TH0 = 0x00;       //ÉèÖÃ¶¨Ê±³õÊ¼Öµ
+ 379   1        TF0 = 0;        //Çå³ýTF0±êÖ¾
+ 380   1        TR0 = 1;        //¶¨Ê±Æ÷0¿ªÊ¼¼ÆÊý
+ 381   1      }
+ 382          
+ 383          /* Timer 1 */
+ 384          /**
+ 385           * @brief Timer 1³õÊ¼»¯º¯Êý
+ 386           */
+ 387          void timer1_init(void)    //1ºÁÃë@12.000MHz
+ 388          {
+ 389   1        AUXR &= 0xBF;     //¶¨Ê±Æ÷Ê±ÖÓ12TÄ£Ê½
+ 390   1        TMOD &= 0x0F;     //ÉèÖÃ¶¨Ê±Æ÷Ä£Ê½
+ 391   1        TL1 = 0x18;       //ÉèÖÃ¶¨Ê±³õÊ¼Öµ
+ 392   1        TH1 = 0xFC;       //ÉèÖÃ¶¨Ê±³õÊ¼Öµ
+ 393   1        TF1 = 0;        //Çå³ýTF1±êÖ¾
+ 394   1        TR1 = 1;        //¶¨Ê±Æ÷1¿ªÊ¼¼ÆÊ±
+ 395   1        ET1 = 1;        // Ê¹ÄÜ¶¨Ê±Æ÷1ÖÐ¶Ï
+ 396   1        EA = 1;         // Ê¹ÄÜÈ«¾ÖÖÐ¶Ï
+ 397   1      }
+ 398          
+ 399          /**
+ 400           * @brief Timer 1ÖÐ¶Ï·þÎñº¯Êý
+ 401           */
+ 402          void timer1_server(void) interrupt 3 {
+ 403   1        // --- ÏµÍ³Ê±ÖÓ ---
+ 404   1        uwTick++;   
+ 405   1        
+ 406   1        // --- Freq ---
+ 407   1        // ¼ÆÊ±1Ãë£¬¶ÁÈ¡ÆµÂÊÖµ
+ 408   1        if(++timer_1s >= 1000) {
+ 409   2          timer_1s = 0; // ÖØÖÃ¼ÆÊ±
+ 410   2          freq = (TH0 << 8) | TL0; // ¶ÁÈ¡ÆµÂÊÖµ
+ 411   2          TL0 = TH0 = 0; // ÖØÖÃ¼ÆÊý³õÖµ
+ 412   2        }
+ 413   1        
+ 414   1        // --- °´¼ü ---
+ 415   1        if(key_flag) {
+ 416   2          if(++timer_2s >= 2000) {
+ 417   3            timer_2s = 2000; // ½«¼ÆÊ±Ç¯Î»ÔÚ2000 
+ 418   3          }
+ 419   2        }
+ 420   1        
+ 421   1        // --- ÊýÂë¹Ü ---
+ 422   1        seg_pos = (++seg_pos) % 8; // ÊýÂë¹ÜÎ»ÖÃË÷ÒýÔÚ 0-7 Ö®¼äÑ­»·ÇÐ»»
+ 423   1        if(seg_buf[seg_pos] > 20) seg_disp(seg_pos, seg_buf[seg_pos] - '.', 1); // ÏÔÊ¾Ð¡Êýµã
+ 424   1        else seg_disp(seg_pos, seg_buf[seg_pos], 0); // Ï¨ÃðÐ¡Êýµã
+ 425   1        
+C51 COMPILER V9.60.7.0   MAIN                                                              03/21/2026 13:07:22 PAGE 8   
+
+ 426   1        // --- LED ---
+ 427   1        // ²É¼¯ÎÂ¶È´óÓÚÎÂ¶È²ÎÊýÊ±£¬¿ªÊ¼¼ÆÊ±
+ 428   1        if(temperature > temperature_p) { 
+ 429   2          // Ã¿¼ÆÊ±100ms·­×ªLED×´Ì¬
+ 430   2          if(++timer_100ms >= 100) {
+ 431   3            timer_100ms = 0;
+ 432   3            led_flag ^= 1;  
+ 433   3          }
+ 434   2        }
+ 435   1        // ²É¼¯ÎÂ¶ÈÐ¡ÓÚµÈÓÚÎÂ¶È²ÎÊýÊ±£¬LEDÏ¨Ãð
+ 436   1        else {
+ 437   2          timer_100ms = 0;
+ 438   2          led_flag = 0;
+ 439   2        }
+ 440   1        
+ 441   1        // --- ÎÂÊª¶È²É¼¯ ---
+ 442   1        if(cllct_flag == 1) {
+ 443   2          // 3ÃëÊ±¼äµ½
+ 444   2          if(++timer_3s >= 3000) {
+ 445   3            cllct_flag = 0; // ÖØÖÃ²É¼¯±êÖ¾
+ 446   3            cllct_lock_flag = 0; // ½â³ý²É¼¯Ëø¶¨
+ 447   3            timer_3s = 0;
+ 448   3            seg_mode = seg_mode_rcd; // ·µ»ØÇÐ»»Ç°µÄ½çÃæ
+ 449   3          }
+ 450   2        }
+ 451   1      }
+ 452          
+ 453          // *** µ÷¶ÈÆ÷ *** //
+ 454          
+ 455          /* µ÷¶ÈÆ÷ÈÎÎñ½á¹¹Ìå¶¨Òå */
+ 456          typedef struct {
+ 457            void (*task_func)(void);  // ÈÎÎñº¯Êý
+ 458            unsigned long int prd_ms; // ÈÎÎñÖ´ÐÐÖÜÆÚ
+ 459            unsigned long int lst_ms; // ÉÏ´ÎÈÎÎñº¯ÊýÖ´ÐÐµÄÊ±¼ä
+ 460          } task_t;
+ 461          
+ 462          /* µ÷¶ÈÆ÷ÈÎÎñº¯ÊýÁÐ±íÊý×é */
+ 463          idata task_t scheduler_task[] = {
+ 464            {key_task, 10, 0},
+ 465            {seg_task, 200, 0},
+ 466            {led_task, 1, 0},
+ 467            {rtc_task, 300, 0},
+ 468            {ad_da_task, 160, 0},
+ 469            {temperature_task, 300, 0},
+ 470          };
+ 471          
+ 472          /**
+ 473           * @brief µ÷¶ÈÆ÷³õÊ¼»¯º¯Êý
+ 474           * @note  »ñÈ¡µ÷¶ÈÆ÷ÈÎÎñº¯ÊýÊýÁ¿
+ 475           */
+ 476          void scheduler_init(void) {
+ 477   1        task_num = sizeof(scheduler_task) / sizeof(task_t);
+ 478   1      }
+ 479          
+ 480          /**
+ 481           * @brief µ÷¶ÈÆ÷ÈÎÎñµ÷¶Èº¯Êý
+ 482           * @note  Ê±¼äÆ¬ÂÖÑ¯µ÷¶ÈÈÎÎñº¯Êý
+ 483           */
+ 484          void scheduler_run(void) {
+ 485   1        unsigned char i;
+ 486   1        
+ 487   1        for(i = 0; i < task_num; i++) {
+C51 COMPILER V9.60.7.0   MAIN                                                              03/21/2026 13:07:22 PAGE 9   
+
+ 488   2          unsigned long int now_time = uwTick; // »ñÈ¡µ±Ç°ÏµÍ³Ê±¼ä
+ 489   2          if(now_time - scheduler_task[i].lst_ms >= scheduler_task[i].prd_ms) {
+ 490   3            scheduler_task[i].lst_ms = now_time; // ¸üÐÂÈÎÎñº¯ÊýÉÏ´ÎÖ´ÐÐÊ±¼ä
+ 491   3            scheduler_task[i].task_func(); // Ö´ÐÐÈÎÎñº¯Êý
+ 492   3          }     
+ 493   2        }   
+ 494   1      }
+ 495          
+ 496          void main(void) {
+ 497   1        sys_init();
+ 498   1        write_rtc(ucRTC); // Ð´ÈëÊ±ÖÓ
+ 499   1        read_temperature(); // ÉÏµçÊ±¶ÁÒ»ÏÂÎÂ¶È£¬·ÀÖ¹ºóÃæ¶Áµ½85¶ÈÒì³£Öµ
+ 500   1        timer0_init();
+ 501   1        timer1_init();
+ 502   1        scheduler_init();
+ 503   1        while(1) {
+ 504   2          scheduler_run();
+ 505   2        }
+ 506   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   1598    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =     19    ----
+   DATA SIZE        =     22       5
+   IDATA SIZE       =     88    ----
+   BIT SIZE         =      8    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

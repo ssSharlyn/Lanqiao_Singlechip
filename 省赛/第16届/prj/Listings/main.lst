@@ -1,0 +1,509 @@
+C51 COMPILER V9.60.7.0   MAIN                                                              03/21/2026 16:30:39 PAGE 1   
+
+
+C51 COMPILER V9.60.7.0, COMPILATION OF MODULE MAIN
+OBJECT MODULE PLACED IN .\Objects\main.obj
+COMPILER INVOKED BY: C:\AAA\C51\BIN\C51.EXE ..\src\user\main.c OPTIMIZE(8,SPEED) BROWSE INCDIR(..\src\driver) DEBUG OBJE
+                    -CTEXTEND PRINT(.\Listings\main.lst) TABS(2) OBJECT(.\Objects\main.obj)
+
+line level    source
+
+   1          #include <STC15F2K60S2.H>
+   2          #include <stdlib.h>
+   3          #include <string.h>
+   4          #include "sys.h"
+   5          #include "seg.h"
+   6          #include "key.h"
+   7          #include "led.h"
+   8          #include "ultra.h"
+   9          #include "ds1302.h"
+  10          #include "iic.h"
+  11          #include "onewire.h"
+  12          
+  13          // ** 参数定义区 ** //
+  14          
+  15          /* scheduler */
+  16          idata unsigned long int uwTick; // 系统计时
+  17          idata unsigned char task_num; // 调度器任务函数数量
+  18          
+  19          /* key */ 
+  20          idata unsigned char key_val, key_down, key_up, key_old; // 按键状态，瞬时状态、下降沿、上升沿、上次状态
+  21          unsigned int timer_2s; // 2s计时器
+  22          bit key_flag = 0;       // 长按计时标志
+  23          
+  24          /* seg */
+  25          pdata unsigned char seg_buf[8] = {10, 10, 10, 10, 10, 10, 10, 10}; // 数码管状态缓存数组，初始化为熄灭
+  26          idata unsigned char seg_pos; // 数码管位置索引
+  27          idata unsigned char seg_mode; // 数码管显示模式，0-频率
+  28          
+  29          /* LED */
+  30          pdata unsigned char ucled[8] = {0, 0, 0, 0, 0, 0, 0, 0}; // LED状态缓存数组，初始化为熄灭
+  31          bit led_flag = 0;          // LED闪烁标志
+  32          unsigned char timer_100ms; // 100ms计时器
+  33          bit relay_state = 0;     // 继电器状态
+  34          bit led_lock_flag;       // LED状态锁定标志
+  35          unsigned char ucled_tr[8] = {0}; // LED实际状态
+  36          bit relay_state_tr = 0;          // 继电器实际状态
+  37          
+  38          /* Ultrasonic */
+  39          idata unsigned int dist; // 超声波所测距离值(单位: cm)
+  40          unsigned int dist_old;   // 上次测得距离值
+  41          unsigned char dist_p = 30; // 距离参数
+  42          
+  43          /* RTC */
+  44          pdata unsigned char ucRTC[3] = {23, 59, 55}; // 时钟数据缓存数组
+  45          
+  46          /* AD/DA */
+  47          idata unsigned int volt_x100; // 光敏电阻电压值x100
+  48          
+  49          /* Temperature */
+  50          idata unsigned int temperature; // 温度值                        
+  51          unsigned char temperature_p = 30; // 温度参数
+  52          
+  53          /* other parameters */
+  54          unsigned char light_level;        // 光强等级
+C51 COMPILER V9.60.7.0   MAIN                                                              03/21/2026 16:30:39 PAGE 2   
+
+  55          unsigned char move_state;         // 运动状态
+  56          bit move_state_3 = 0;             // 锁定时运动状态3判断(用于进入参数界面时保持LED8闪烁状态)
+  57          unsigned char move_state_old;     // 上次运动状态
+  58          unsigned char param_mode;         // 参数界面
+  59          unsigned int relay_num = 0;          // 继电器吸合次数
+  60          
+  61          unsigned int timer_1s; // 1s计时器，用于采集距离数据
+  62          unsigned int timer_3s; // 3s计时器，用于锁定运动状态
+  63          bit lock_flag = 0;     // 运动状态锁定标志 
+  64          
+  65          bit close_flag = 0;    // 接近判断标志
+  66          bit hot_flag = 0;      // 高温判断标志
+  67          
+  68          
+  69          // ** 函数定义区 ** //
+  70          
+  71          /**
+  72           * @brief 按键状态机任务函数
+  73           * @note  利用位运算进行边沿检测
+  74           */
+  75          void key_task(void) {
+  76   1        key_val = key_read(); // 获取当前按键状态
+  77   1        key_down = key_val & (key_val ^ key_old); // 获取按键下降沿状态
+  78   1        key_up = ~key_val & (key_val ^ key_old);  // 获取按键上升沿状态
+  79   1        key_old = key_val; // 更新上一次按键状态
+  80   1        
+  81   1        switch(key_down) {
+  82   2          // --- 界面按键 --- 
+  83   2          case 4:
+  84   2            seg_mode = (seg_mode + 1) % 4; // 切换界面 
+  85   2            // 每次从运动检测界面切换到参数设置界面时，默认处于温度参数子界面
+  86   2            if(seg_mode == 1) param_mode = 0;
+  87   2            // 进入参数界面时，LED、继电器状态锁定
+  88   2            if(seg_mode == 2) { 
+  89   3              led_lock_flag = 1; 
+  90   3              move_state_3 = (move_state == 3); // 判断锁定时，是否处于运动状态3
+  91   3            }
+  92   2            else {
+  93   3              led_lock_flag = 0;
+  94   3              move_state_3 = 0;
+  95   3            }
+  96   2            break;  
+  97   2          // --- 选择按键 ---
+  98   2          case 5:
+  99   2            param_mode ^= 1; // 切换参数子界面
+ 100   2            break;
+ 101   2          // --- "+"按键 ---
+ 102   2          case 8:
+ 103   2            // 仅在参数界面生效
+ 104   2            if(seg_mode == 2) {
+ 105   3              // 温度参数界面下
+ 106   3              if(param_mode == 0) {
+ 107   4                // 边界约束
+ 108   4                if(++temperature_p >= 80) {
+ 109   5                  temperature_p = 80;
+ 110   5                }
+ 111   4              }
+ 112   3              // 距离参数界面下 
+ 113   3              else {
+ 114   4                dist_p += 5;
+ 115   4                // 边界约束
+ 116   4                if(dist_p >= 80) {
+C51 COMPILER V9.60.7.0   MAIN                                                              03/21/2026 16:30:39 PAGE 3   
+
+ 117   5                  dist_p = 80;
+ 118   5                }
+ 119   4              }       
+ 120   3            }
+ 121   2            break;
+ 122   2          // --- "-"选择按键 ---
+ 123   2          case 9:
+ 124   2            // 仅在参数界面生效
+ 125   2            if(seg_mode == 2) {
+ 126   3              // 温度参数界面下
+ 127   3              if(param_mode == 0) {
+ 128   4                // 边界约束
+ 129   4                if(--temperature_p <= 20) {
+ 130   5                  temperature_p = 20;
+ 131   5                }
+ 132   4              }
+ 133   3              // 距离参数界面下 
+ 134   3              else {
+ 135   4                dist_p -= 5;
+ 136   4                // 边界约束
+ 137   4                if(dist_p <= 20) {
+ 138   5                  dist_p = 20;
+ 139   5                }
+ 140   4              }       
+ 141   3            }
+ 142   2            break;
+ 143   2        }
+ 144   1        
+ 145   1        // 组合按键(不要判断key_down，因为key_down只在按下的一瞬间有值)
+ 146   1        // 仅在统计界面生效
+ 147   1        // 检测到按键一直按下
+ 148   1        if(key_old == 89) {
+ 149   2          key_flag = 1; // 拉高计时标志
+ 150   2          // 长按达到2s，清零继电器吸合次数
+ 151   2          if(timer_2s >= 2000) {
+ 152   3            relay_num = 0;  
+ 153   3          }
+ 154   2        }
+ 155   1        // 检测到按键抬起
+ 156   1        if(key_up == 8 || key_up == 9 || key_up == 89) {
+ 157   2          key_flag = 0; // 重置计时标志
+ 158   2          timer_2s = 0; // 重置计时器
+ 159   2        }
+ 160   1      }
+ 161          
+ 162          /**
+ 163           * @brief 数码管显示任务函数
+ 164           * @note  需要显示小数点时，在值后加上'.'
+ 165           */
+ 166          void seg_task(void) {
+ 167   1        seg_buf[0] = 12 + seg_mode; // 显示字母
+ 168   1        switch(seg_mode) {
+ 169   2          // --- 环境状态界面 ----
+ 170   2          case 0:
+ 171   2            seg_buf[1] = temperature / 10 % 10;
+ 172   2            seg_buf[2] = temperature % 10;
+ 173   2            seg_buf[3] = 10;
+ 174   2            seg_buf[4] = 10;
+ 175   2            seg_buf[5] = 10;
+ 176   2            seg_buf[6] = 15; // 字母N
+ 177   2            seg_buf[7] = light_level; // 光强等级
+ 178   2            break;
+C51 COMPILER V9.60.7.0   MAIN                                                              03/21/2026 16:30:39 PAGE 4   
+
+ 179   2          // --- 运动检测界面 ----
+ 180   2          case 1:
+ 181   2            seg_buf[1] = move_state; // 运动状态
+ 182   2            seg_buf[2] = 10;
+ 183   2            seg_buf[3] = 10;
+ 184   2            seg_buf[4] = 10;
+ 185   2            seg_buf[5] = dist / 100 % 10;
+ 186   2            seg_buf[6] = dist / 10 % 10; 
+ 187   2            seg_buf[7] = dist % 10;
+ 188   2            break; 
+ 189   2          // --- 参数设置界面 ----
+ 190   2          case 2:
+ 191   2            seg_buf[1] = 12 + param_mode; // 显示字母
+ 192   2            seg_buf[2] = 10;
+ 193   2            seg_buf[3] = 10;
+ 194   2            seg_buf[4] = 10;
+ 195   2            seg_buf[5] = 10;
+ 196   2            // 温度参数子界面
+ 197   2            if(param_mode == 0) {
+ 198   3              seg_buf[6] = temperature_p / 10 % 10;
+ 199   3              seg_buf[7] = temperature_p % 10;  
+ 200   3            }
+ 201   2            // 距离参数子界面
+ 202   2            else {
+ 203   3              seg_buf[6] = dist_p / 10 % 10; 
+ 204   3              seg_buf[7] = dist_p % 10; 
+ 205   3            }
+ 206   2            break; 
+ 207   2          // --- 统计数据界面 ----
+ 208   2          case 3:
+ 209   2            seg_buf[1] = 12; // 字母C
+ 210   2            // 继电器吸合次数(数据长度不足时，高位熄灭)
+ 211   2            seg_buf[4] = relay_num >= 1000 ? relay_num / 100 % 10 : 10;
+ 212   2            seg_buf[5] = relay_num >= 100 ? relay_num / 100 % 10 : 10;
+ 213   2            seg_buf[6] = relay_num >= 10 ? relay_num / 10 % 10 : 10;
+ 214   2            seg_buf[7] = relay_num % 10;
+ 215   2            break;    
+ 216   2        }
+ 217   1      }
+ 218          
+ 219          /**
+ 220           * @brief LED任务函数
+ 221           */
+ 222          void led_task(void) {
+ 223   1        unsigned char i;
+ 224   1        
+ 225   1        // --- 灯光控制功能 ---
+ 226   1        for(i = 0; i < 4; i++) {
+ 227   2          ucled[i] = (i < light_level) * (unsigned char)close_flag;
+ 228   2        }
+ 229   1        
+ 230   1        // --- 运动状态指示功能 ---
+ 231   1        if(move_state != 3) {
+ 232   2          ucled[7] = (move_state == 2); // 灭/亮
+ 233   2        }
+ 234   1        else {
+ 235   2          ucled[7] = led_flag;         // 闪烁
+ 236   2        }
+ 237   1        
+ 238   1        // --- 继电器控制 ---
+ 239   1        // 同时触发高温、接近判定时，继电器吸合
+ 240   1        if(close_flag && hot_flag) {      
+C51 COMPILER V9.60.7.0   MAIN                                                              03/21/2026 16:30:39 PAGE 5   
+
+ 241   2          relay_state = 1;      
+ 242   2        }     
+ 243   1        // 否则继电器断开
+ 244   1        else {
+ 245   2          relay_state= 0;
+ 246   2        }
+ 247   1        
+ 248   1        // 判断LED、继电器状态是否锁定
+ 249   1        if(!led_lock_flag) {
+ 250   2          memcpy(ucled_tr, ucled, 8);
+ 251   2          // 继电器处于断开状态时才吸合，统计次数
+ 252   2          if(relay_state_tr == 0 && relay_state == 1) {
+ 253   3            relay_num++;
+ 254   3          }
+ 255   2          relay_state_tr = relay_state;
+ 256   2        }
+ 257   1        // 锁定状态，判断LED8是否闪烁
+ 258   1        else {
+ 259   2          // 只有确定之前是在闪烁状态，才允许在锁定时更新闪烁信号
+ 260   2          if(move_state_3 == 1)
+ 261   2            ucled_tr[7] = led_flag;
+ 262   2        }
+ 263   1        
+ 264   1        // 控制LED
+ 265   1        led_disp(ucled_tr); 
+ 266   1        
+ 267   1        // 控制继电器
+ 268   1        relay(relay_state_tr);
+ 269   1      }
+ 270          
+ 271          /**
+ 272           * @brief 超声波测距任务函数
+ 273           */
+ 274          void ultra_task(void) {
+ 275   1        dist = ultra_dat();
+ 276   1        
+ 277   1        // 接近判定
+ 278   1        if(dist < dist_p) close_flag = 1;
+ 279   1        else close_flag = 0;
+ 280   1      }
+ 281          
+ 282          /**
+ 283           * @brief DS1302时钟任务函数
+ 284           */
+ 285          void rtc_task(void) {
+ 286   1        read_rtc(ucRTC);
+ 287   1      }
+ 288             
+ 289          /**
+ 290           * @brief AD/DA转换任务函数
+ 291           * @note  由于AD转换读取到的是上一次转换的数值，因此读取两个通道的数值时需要交换通道
+ 292           */
+ 293          void ad_da_task(void) {
+ 294   1        ad_read(0x41);
+ 295   1        volt_x100 = ad_read(0x41) * 100 / 51; // 读取光敏电阻电压值
+ 296   1        
+ 297   1        // 判断光强等级
+ 298   1        if(volt_x100 >= 300) light_level = 1;
+ 299   1        else if(volt_x100 >= 200) light_level = 2;
+ 300   1        else if(volt_x100 >= 50) light_level = 3;
+ 301   1        else light_level = 4;
+ 302   1      }
+C51 COMPILER V9.60.7.0   MAIN                                                              03/21/2026 16:30:39 PAGE 6   
+
+ 303          
+ 304          /**
+ 305           * @brief DS18B20温度转换任务函数
+ 306           */
+ 307          void temperature_task(void) {
+ 308   1        temperature = read_temperature();
+ 309   1        
+ 310   1        // 高温判定
+ 311   1        if(temperature > temperature_p) hot_flag = 1;
+ 312   1        else hot_flag = 0;
+ 313   1      }
+ 314          
+ 315          /* Timer 0 - NE555 */
+ 316          /**
+ 317           * @brief Timer 0初始化函数
+ 318           * @note  初始化NE555
+ 319           */
+ 320          void timer0_init(void)    
+ 321          {
+ 322   1        AUXR &= 0x7F;     //定时器时钟12T模式
+ 323   1        TMOD &= 0xF0;     //设置定时器模式
+ 324   1        TMOD |= 0x05;     //设置定时器0为16位不自动重装载计数模式
+ 325   1        TL0 = 0x00;       //设置定时初始值
+ 326   1        TH0 = 0x00;       //设置定时初始值
+ 327   1        TF0 = 0;        //清除TF0标志
+ 328   1        TR0 = 1;        //定时器0开始计数
+ 329   1      }
+ 330          
+ 331          /* Timer 1 */
+ 332          /**
+ 333           * @brief Timer 1初始化函数
+ 334           */
+ 335          void timer1_init(void)    //1毫秒@12.000MHz
+ 336          {
+ 337   1        AUXR &= 0xBF;     //定时器时钟12T模式
+ 338   1        TMOD &= 0x0F;     //设置定时器模式
+ 339   1        TL1 = 0x18;       //设置定时初始值
+ 340   1        TH1 = 0xFC;       //设置定时初始值
+ 341   1        TF1 = 0;        //清除TF1标志
+ 342   1        TR1 = 1;        //定时器1开始计时
+ 343   1        ET1 = 1;        // 使能定时器1中断
+ 344   1        EA = 1;         // 使能全局中断
+ 345   1      }
+ 346          
+ 347          /**
+ 348           * @brief Timer 1中断服务函数
+ 349           */
+ 350          void timer1_server(void) interrupt 3 {
+ 351   1        // --- 系统时钟 ---
+ 352   1        uwTick++;   
+ 353   1        
+ 354   1        // --- Key ---
+ 355   1        // 长按2s计时
+ 356   1        if(key_flag) {
+ 357   2          if(++timer_2s >= 2000) {
+ 358   3            timer_2s = 2000; // 将计时钳位在2000
+ 359   3          }
+ 360   2        }
+ 361   1        
+ 362   1        // --- 数码管 ---
+ 363   1        seg_pos = (++seg_pos) % 8; // 数码管位置索引在 0-7 之间循环切换
+ 364   1        if(seg_buf[seg_pos] > 20) seg_disp(seg_pos, seg_buf[seg_pos] - '.', 1); // 显示小数点
+C51 COMPILER V9.60.7.0   MAIN                                                              03/21/2026 16:30:39 PAGE 7   
+
+ 365   1        else seg_disp(seg_pos, seg_buf[seg_pos], 0); // 熄灭小数点
+ 366   1        
+ 367   1        // --- LED ---
+ 368   1        // 跑动状态，LED8闪烁
+ 369   1        if(move_state == 3 || move_state_3 == 1) {
+ 370   2          if(++timer_100ms >= 100) {
+ 371   3            led_flag ^= 1;
+ 372   3            timer_100ms = 0;
+ 373   3          }
+ 374   2        }
+ 375   1        else {
+ 376   2          led_flag = 0;
+ 377   2          timer_100ms = 0;
+ 378   2        }
+ 379   1        
+ 380   1        // --- 运动状态 ---
+ 381   1        // 非锁定期间才判断运动状态
+ 382   1        if(!lock_flag) {
+ 383   2          // 1s采集一次距离数据
+ 384   2          if(++timer_1s >= 1000) {
+ 385   3            // 判断运动状态
+ 386   3            if(abs((int)dist - (int)dist_old) < 5) {
+ 387   4              move_state = 1;
+ 388   4            }
+ 389   3            else if(abs((int)dist - (int)dist_old) < 10) {
+ 390   4              move_state = 2;
+ 391   4            }
+ 392   3            else {
+ 393   4              move_state = 3;
+ 394   4            }
+ 395   3            
+ 396   3            // 检测运动状态是否更新
+ 397   3            if(move_state != move_state_old && move_state_old != 0) {
+ 398   4              lock_flag = 1; // 锁定运动状态
+ 399   4            }
+ 400   3            
+ 401   3            // 更新上一次数据
+ 402   3            dist_old = dist;
+ 403   3            move_state_old = move_state;
+ 404   3            
+ 405   3            timer_1s = 0; // 重置定时器
+ 406   3          }
+ 407   2        }
+ 408   1        
+ 409   1        // 状态锁定计时
+ 410   1        if(lock_flag) {
+ 411   2          if(++timer_3s >= 3000) {
+ 412   3            lock_flag = 0; // 解除状态锁定
+ 413   3            timer_3s = 0;  // 重置定时器
+ 414   3          }
+ 415   2        } 
+ 416   1      }
+ 417          
+ 418          // *** 调度器 *** //
+ 419          
+ 420          /* 调度器任务结构体定义 */
+ 421          typedef struct {
+ 422            void (*task_func)(void);  // 任务函数
+ 423            unsigned long int prd_ms; // 任务执行周期
+ 424            unsigned long int lst_ms; // 上次任务函数执行的时间
+ 425          } task_t;
+ 426          
+C51 COMPILER V9.60.7.0   MAIN                                                              03/21/2026 16:30:39 PAGE 8   
+
+ 427          /* 调度器任务函数列表数组 */
+ 428          idata task_t scheduler_task[] = {
+ 429            {key_task, 10, 0},
+ 430            {seg_task, 200, 0},
+ 431            {led_task, 1, 0},
+ 432            {ultra_task, 100, 0},
+ 433            {rtc_task, 200, 0},
+ 434            {ad_da_task, 200, 0},
+ 435            {temperature_task, 200, 0},
+ 436          };
+ 437          
+ 438          /**
+ 439           * @brief 调度器初始化函数
+ 440           * @note  获取调度器任务函数数量
+ 441           */
+ 442          void scheduler_init(void) {
+ 443   1        task_num = sizeof(scheduler_task) / sizeof(task_t);
+ 444   1      }
+ 445          
+ 446          /**
+ 447           * @brief 调度器任务调度函数
+ 448           * @note  时间片轮询调度任务函数
+ 449           */
+ 450          void scheduler_run(void) {
+ 451   1        unsigned char i;
+ 452   1        
+ 453   1        for(i = 0; i < task_num; i++) {
+ 454   2          unsigned long int now_time = uwTick; // 获取当前系统时间
+ 455   2          if(now_time - scheduler_task[i].lst_ms >= scheduler_task[i].prd_ms) {
+ 456   3            scheduler_task[i].lst_ms = now_time; // 更新任务函数上次执行时间
+ 457   3            scheduler_task[i].task_func(); // 执行任务函数
+ 458   3          }     
+ 459   2        }   
+ 460   1      }
+ 461          
+ 462          void main(void) { 
+ 463   1        sys_init();
+ 464   1        write_rtc(ucRTC); // 写入时钟
+ 465   1        read_temperature(); // 上电时读一下温度
+ 466   1        timer1_init();
+ 467   1        scheduler_init();
+ 468   1        while(1) {
+ 469   2          scheduler_run();
+ 470   2        }
+ 471   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   1378    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =     19    ----
+   DATA SIZE        =     25       5
+   IDATA SIZE       =     94    ----
+   BIT SIZE         =      9    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

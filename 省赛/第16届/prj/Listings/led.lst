@@ -1,0 +1,84 @@
+C51 COMPILER V9.60.7.0   LED                                                               03/20/2026 22:07:45 PAGE 1   
+
+
+C51 COMPILER V9.60.7.0, COMPILATION OF MODULE LED
+OBJECT MODULE PLACED IN .\Objects\led.obj
+COMPILER INVOKED BY: C:\AAA\C51\BIN\C51.EXE ..\src\driver\led.c OPTIMIZE(8,SPEED) BROWSE INCDIR(..\src\driver) DEBUG OBJ
+                    -ECTEXTEND PRINT(.\Listings\led.lst) TABS(2) OBJECT(.\Objects\led.obj)
+
+line level    source
+
+   1          #include "led.h"
+   2          
+   3          idata unsigned char temp_1 = 0x00; // 当前LED状态
+   4          idata unsigned char temp_1_old = 0xff; // 上一次LED状态
+   5          
+   6          /**
+   7           * @brief LED扫描函数
+   8           * @param ucled 指向包含8个元素的数组首地址，用于记录8个LED的状态
+   9           * @note  仅在检测到LED状态改变时，才更新硬件
+  10           */
+  11          void led_disp(unsigned char *ucled) {
+  12   1        unsigned char temp;
+  13   1        
+  14   1        temp_1 = 0x00; // 初始化LED状态
+  15   1        temp_1 = ucled[0] << 0| ucled[1] << 1| ucled[2] << 2| ucled[3] << 3| 
+  16   1                 ucled[4] << 4| ucled[5] << 5| ucled[6] << 6| ucled[7] << 7; // 记录当前LED状态
+  17   1        
+  18   1        // 当检测到LED状态发生变化时，更改LED状态
+  19   1        if(temp_1_old != temp_1) {
+  20   2          P0 = ~temp_1; // 对状态数据取反，因为是低电平点亮
+  21   2          temp = P2 & 0x1f | 0x80; // 选通锁存器Y4通道
+  22   2          P2 = temp; // 打开锁存器，传送数据
+  23   2          temp = P2 & 0x1f; 
+  24   2          P2 = temp; // 锁定锁存器
+  25   2          temp_1_old = temp_1; // 更新上一次LED状态
+  26   2        }
+  27   1      }
+  28          
+  29          idata unsigned char temp_2 = 0x00; // 当前外设状态
+  30          idata unsigned char temp_2_old = 0xff; // 上一次外设状态
+  31          
+  32          /**
+  33           * @brief 继电器驱动函数
+  34           * @param en 继电器状态控制位 1-吸合 0-断开  
+  35           * @note  控制继电器的状态
+  36           */
+  37          void relay(bit en) {
+  38   1        unsigned char temp;
+  39   1        
+  40   1        if(en) {
+  41   2          temp_2 |= 0x10; // 继电器吸合 
+  42   2        }
+  43   1        else {
+  44   2          temp_2 &= ~0x10; // 继电器断开 
+  45   2        }
+  46   1        
+  47   1        // 当检测到外设状态发生变化时，更改外设状态
+  48   1        if(temp_2_old != temp_2)
+  49   1        {
+  50   2          P0 = temp_2; // 准备数据
+  51   2          temp = P2 & 0x1f | 0xa0; // 选通锁存器Y5通道
+  52   2          P2 = temp; // 打开锁存器，传送数据
+  53   2          temp = P2 & 0x1f; 
+  54   2          P2 = temp; // 锁定锁存器
+C51 COMPILER V9.60.7.0   LED                                                               03/20/2026 22:07:45 PAGE 2   
+
+  55   2          
+  56   2          temp_2_old = temp_2; // 更新上一次外设状态
+  57   2        }
+  58   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    171    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =   ----    ----
+   IDATA SIZE       =      4    ----
+   BIT SIZE         =   ----       1
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)
